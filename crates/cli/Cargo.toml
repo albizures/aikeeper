@@ -15,3 +15,6 @@ workspace = true
 aikeeper-app = { path = "../app" }
 aikeeper-domain = { path = "../domain" }
 aikeeper-store = { path = "../store" }
+arboard = "3.7.0"
+crossterm = "0.29.0"
+ratatui = "0.30.2"

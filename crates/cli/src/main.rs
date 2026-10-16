@@ -20,6 +20,7 @@ fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
     let mut arguments = arguments.into_iter();
     match arguments.next().as_deref() {
         Some("list") => list(arguments),
+        Some("interactive") => interactive_command(arguments),
         Some("title") => title(arguments),
         Some("tag") => tag(arguments),
         Some("--help") | Some("-h") | None => {
@@ -27,9 +28,24 @@ fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
             Ok(())
         }
         Some(command) => Err(format!(
-            "unknown command {command:?}; expected list, title, or tag"
+            "unknown command {command:?}; expected list, interactive, title, or tag"
         )),
     }
+}
+
+fn interactive_command(arguments: impl Iterator<Item = String>) -> Result<(), String> {
+    let arguments = arguments.collect::<Vec<_>>();
+    if arguments
+        .iter()
+        .any(|argument| matches!(argument.as_str(), "--help" | "-h"))
+    {
+        println!("{INTERACTIVE_USAGE}");
+        return Ok(());
+    }
+    if let Some(options) = parse_list_options(arguments.into_iter())? {
+        interactive::run(options)?;
+    }
+    Ok(())
 }
 
 fn list(arguments: impl Iterator<Item = String>) -> Result<(), String> {
@@ -243,6 +259,7 @@ fn format_sessions(sessions: &[aikeeper_domain::AgentSession]) -> String {
 }
 
 const LIST_USAGE: &str = "Usage: aikeeper list [--agent claude-code|pi] [--folder PATH] [--title TEXT] [--tag TAG]... [--sort date] [--limit POSITIVE_INTEGER]";
+const INTERACTIVE_USAGE: &str = "Usage: aikeeper interactive [--agent claude-code|pi] [--folder PATH] [--title TEXT] [--tag TAG]... [--sort date] [--limit POSITIVE_INTEGER]";
 const TITLE_SET_USAGE: &str = "Usage: aikeeper title set --agent claude-code|pi --id ID [--] TITLE";
 const TITLE_CLEAR_USAGE: &str = "Usage: aikeeper title clear --agent claude-code|pi --id ID";
 const TAG_ADD_USAGE: &str = "Usage: aikeeper tag add --agent claude-code|pi --id ID TAG";
@@ -250,7 +267,7 @@ const TAG_REMOVE_USAGE: &str = "Usage: aikeeper tag remove --agent claude-code|p
 
 fn print_usage() {
     println!(
-        "{LIST_USAGE}\n{TITLE_SET_USAGE}\n{TITLE_CLEAR_USAGE}\n{TAG_ADD_USAGE}\n{TAG_REMOVE_USAGE}"
+        "{LIST_USAGE}\n{INTERACTIVE_USAGE}\n{TITLE_SET_USAGE}\n{TITLE_CLEAR_USAGE}\n{TAG_ADD_USAGE}\n{TAG_REMOVE_USAGE}"
     );
 }
 
@@ -271,7 +288,8 @@ mod tests {
     use aikeeper_domain::{AgentRuntime, AgentSession};
 
     use super::{
-        LIST_USAGE, TITLE_SET_USAGE, format_sessions, parse_list_options, parse_mutation_options,
+        INTERACTIVE_USAGE, LIST_USAGE, TITLE_SET_USAGE, format_sessions, parse_list_options,
+        parse_mutation_options,
     };
 
     #[test]
@@ -288,6 +306,14 @@ mod tests {
         assert_eq!(
             format_sessions(&[session]),
             "AGENT\tFOLDER\tTITLE\tTAGS\tID\npi\t-\t-\t-\tsession-id\n"
+        );
+    }
+
+    #[test]
+    fn interactive_command_rejects_non_terminal_streams() {
+        assert_eq!(
+            super::run(["interactive".to_owned()]),
+            Err("interactive requires both stdin and stdout to be terminals".to_owned())
         );
     }
 
@@ -362,5 +388,6 @@ mod tests {
             .is_err()
         );
         assert!(LIST_USAGE.contains("[--folder PATH]"));
+        assert!(INTERACTIVE_USAGE.contains("[--folder PATH]"));
     }
 }
