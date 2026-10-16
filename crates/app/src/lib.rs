@@ -40,11 +40,15 @@ pub fn parse_folder(value: &str) -> Result<FolderFilter, String> {
 }
 
 pub fn parse_title_filter(value: &str) -> Result<String, String> {
-    normalize_text(value, "--title", 256, true)
+    Ok(parse_session_title(value)?.to_lowercase())
+}
+
+pub fn parse_session_title(value: &str) -> Result<String, String> {
+    normalize_text(value, "title", 256, true)
 }
 
 pub fn parse_tag(value: &str) -> Result<String, String> {
-    normalize_text(value, "--tag", 64, false)
+    Ok(normalize_text(value, "tag", 64, false)?.to_lowercase())
 }
 
 pub fn parse_limit(value: &str) -> Result<usize, String> {
@@ -123,7 +127,7 @@ fn normalize_text(
     if value.contains(['\t', '\r', '\n']) || (!allows_comma && value.contains(',')) {
         return Err(format!("{option} contains unsupported characters"));
     }
-    Ok(value.to_lowercase())
+    Ok(value.to_owned())
 }
 
 fn path_components(path: &Path) -> Vec<OsString> {
@@ -146,8 +150,8 @@ mod tests {
     use aikeeper_domain::{AgentRuntime, AgentSession};
 
     use super::{
-        ListOptions, list_sessions, parse_agent, parse_folder, parse_limit, parse_tag,
-        parse_title_filter,
+        ListOptions, list_sessions, parse_agent, parse_folder, parse_limit, parse_session_title,
+        parse_tag, parse_title_filter,
     };
 
     fn session(
@@ -269,9 +273,13 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_title_filters_and_rejects_blank_values() {
+    fn validates_titles_and_normalizes_title_filters_and_tags() {
+        assert_eq!(parse_session_title("  RÉSUMÉ  "), Ok("RÉSUMÉ".to_owned()));
         assert_eq!(parse_title_filter("  RÉSUMÉ  "), Ok("résumé".to_owned()));
-        assert!(parse_title_filter(" \t ").is_err());
+        assert_eq!(parse_tag("  RÉSUMÉ  "), Ok("résumé".to_owned()));
+        assert!(parse_session_title(" \t ").is_err());
+        assert!(parse_session_title("a\nb").is_err());
+        assert!(parse_tag("a,b").is_err());
     }
 
     #[test]
