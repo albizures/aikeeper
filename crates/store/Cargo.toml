@@ -9,3 +9,5 @@ workspace = true
 
 [dependencies]
 aikeeper-domain = { path = "../domain" }
+chrono = "0.4"
+serde_json = "1"
