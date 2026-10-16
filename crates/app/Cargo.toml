@@ -1,0 +1,12 @@
+[package]
+name = "aikeeper-app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aikeeper-domain = { path = "../domain" }
+aikeeper-store = { path = "../store" }
