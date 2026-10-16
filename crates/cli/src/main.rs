@@ -7,6 +7,8 @@ use aikeeper_app::{
 use aikeeper_domain::AgentRuntime;
 use aikeeper_store::{MetadataStore, discover_default};
 
+mod interactive;
+
 fn main() {
     if let Err(error) = run(env::args().skip(1)) {
         eprintln!("error: {error}");
