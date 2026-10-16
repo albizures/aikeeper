@@ -1,4 +1,5 @@
 use std::{
+    env,
     fs::{self, File},
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
@@ -7,6 +8,7 @@ use std::{
 
 use aikeeper_domain::{AgentRuntime, AgentSession};
 use chrono::DateTime;
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
 /// Discovers sessions in the current user's supported Agent Runtime stores.
@@ -31,7 +33,137 @@ pub fn discover(home: &Path) -> Vec<AgentSession> {
 }
 
 fn home_directory() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    env::var_os("HOME").map(PathBuf::from)
+}
+
+/// SQLite-backed user-owned Session Metadata.
+pub struct MetadataStore {
+    connection: Connection,
+}
+
+impl MetadataStore {
+    /// Opens the current user's metadata database, creating and migrating it if needed.
+    pub fn open_default() -> Result<Self, String> {
+        Self::open(&metadata_database_path()?)
+    }
+
+    /// Opens a metadata database at `path`, creating and migrating it if needed.
+    pub fn open(path: &Path) -> Result<Self, String> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("metadata database path {} has no parent", path.display()))?;
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("create metadata directory {}: {error}", parent.display()))?;
+        let connection = Connection::open(path)
+            .map_err(|error| format!("open metadata database {}: {error}", path.display()))?;
+        connection
+            .busy_timeout(Duration::from_secs(5))
+            .map_err(|error| format!("configure metadata database: {error}"))?;
+        connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS session_metadata (
+                    runtime TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    title TEXT,
+                    PRIMARY KEY (runtime, session_id)
+                );
+                CREATE TABLE IF NOT EXISTS session_tags (
+                    runtime TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    tag TEXT NOT NULL,
+                    PRIMARY KEY (runtime, session_id, tag)
+                );",
+            )
+            .map_err(|error| format!("migrate metadata database: {error}"))?;
+        Ok(Self { connection })
+    }
+
+    /// Adds stored metadata to currently discovered Agent Sessions.
+    pub fn hydrate_sessions(&self, sessions: &mut [AgentSession]) -> Result<(), String> {
+        for session in sessions {
+            let runtime = session.runtime.to_string();
+            session.metadata.title = self
+                .connection
+                .query_row(
+                    "SELECT title FROM session_metadata WHERE runtime = ?1 AND session_id = ?2",
+                    params![runtime, session.id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| format!("read session title: {error}"))?;
+            let mut statement = self
+                .connection
+                .prepare(
+                    "SELECT tag FROM session_tags WHERE runtime = ?1 AND session_id = ?2 ORDER BY tag",
+                )
+                .map_err(|error| format!("read session tags: {error}"))?;
+            session.metadata.tags = statement
+                .query_map(params![session.runtime.to_string(), session.id], |row| {
+                    row.get(0)
+                })
+                .map_err(|error| format!("read session tags: {error}"))?
+                .collect::<Result<Vec<String>, _>>()
+                .map_err(|error| format!("read session tags: {error}"))?;
+        }
+        Ok(())
+    }
+
+    pub fn set_title(&self, runtime: AgentRuntime, id: &str, title: &str) -> Result<(), String> {
+        self.connection
+            .execute(
+                "INSERT INTO session_metadata (runtime, session_id, title) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(runtime, session_id) DO UPDATE SET title = excluded.title",
+                params![runtime.to_string(), id, title],
+            )
+            .map_err(|error| format!("store session title: {error}"))?;
+        Ok(())
+    }
+
+    pub fn clear_title(&self, runtime: AgentRuntime, id: &str) -> Result<(), String> {
+        self.connection
+            .execute(
+                "DELETE FROM session_metadata WHERE runtime = ?1 AND session_id = ?2",
+                params![runtime.to_string(), id],
+            )
+            .map_err(|error| format!("clear session title: {error}"))?;
+        Ok(())
+    }
+
+    pub fn add_tag(&self, runtime: AgentRuntime, id: &str, tag: &str) -> Result<(), String> {
+        self.connection
+            .execute(
+                "INSERT OR IGNORE INTO session_tags (runtime, session_id, tag) VALUES (?1, ?2, ?3)",
+                params![runtime.to_string(), id, tag],
+            )
+            .map_err(|error| format!("store session tag: {error}"))?;
+        Ok(())
+    }
+
+    pub fn remove_tag(&self, runtime: AgentRuntime, id: &str, tag: &str) -> Result<(), String> {
+        self.connection
+            .execute(
+                "DELETE FROM session_tags WHERE runtime = ?1 AND session_id = ?2 AND tag = ?3",
+                params![runtime.to_string(), id, tag],
+            )
+            .map_err(|error| format!("remove session tag: {error}"))?;
+        Ok(())
+    }
+}
+
+fn metadata_database_path() -> Result<PathBuf, String> {
+    match env::var_os("XDG_DATA_HOME") {
+        Some(value) if value.is_empty() => Err("XDG_DATA_HOME must not be empty".to_owned()),
+        Some(value) => {
+            let path = PathBuf::from(value);
+            if !path.is_absolute() {
+                return Err("XDG_DATA_HOME must be an absolute path".to_owned());
+            }
+            Ok(path.join("aikeeper/aikeeper.sqlite3"))
+        }
+        None => home_directory()
+            .map(|home| home.join(".local/share/aikeeper/aikeeper.sqlite3"))
+            .ok_or_else(|| "HOME is required when XDG_DATA_HOME is unset".to_owned()),
+    }
 }
 
 fn discover_claude_code(root: &Path) -> Vec<AgentSession> {
@@ -86,6 +218,7 @@ fn parse_claude_transcript(path: &Path, id: &str) -> Option<AgentSession> {
         id: id.to_owned(),
         cwd,
         last_activity: activity.or_else(|| modified(path)),
+        metadata: Default::default(),
         discovery_order: 0,
     })
 }
@@ -145,6 +278,7 @@ fn parse_pi_session(path: &Path) -> Option<AgentSession> {
         last_activity: activity
             .or_else(|| header_timestamp.and_then(parse_timestamp))
             .or_else(|| modified(path)),
+        metadata: Default::default(),
         discovery_order: 0,
     })
 }
@@ -203,9 +337,9 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use aikeeper_domain::AgentRuntime;
+    use aikeeper_domain::{AgentRuntime, AgentSession};
 
-    use super::discover;
+    use super::{MetadataStore, discover};
 
     fn test_home(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -224,6 +358,37 @@ mod tests {
         fs::create_dir_all(path.parent().expect("fixture has parent"))
             .expect("create fixture parent");
         fs::write(path, body).expect("write fixture");
+    }
+
+    #[test]
+    fn hydrates_titles_and_sorted_tags_for_matching_runtime_and_id() {
+        let home = test_home("metadata");
+        let store = MetadataStore::open(&home.join("metadata.sqlite3")).expect("open metadata");
+        store
+            .set_title(AgentRuntime::Pi, "shared-id", "Session title")
+            .expect("set title");
+        store
+            .add_tag(AgentRuntime::Pi, "shared-id", "zebra")
+            .expect("add tag");
+        store
+            .add_tag(AgentRuntime::Pi, "shared-id", "alpha")
+            .expect("add tag");
+        let mut sessions = vec![AgentSession {
+            runtime: AgentRuntime::Pi,
+            id: "shared-id".to_owned(),
+            cwd: None,
+            last_activity: None,
+            metadata: Default::default(),
+            discovery_order: 0,
+        }];
+
+        store
+            .hydrate_sessions(&mut sessions)
+            .expect("hydrate sessions");
+
+        assert_eq!(sessions[0].metadata.title.as_deref(), Some("Session title"));
+        assert_eq!(sessions[0].metadata.tags, ["alpha", "zebra"]);
+        fs::remove_dir_all(home).expect("remove temporary home");
     }
 
     #[test]

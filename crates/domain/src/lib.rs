@@ -34,6 +34,13 @@ impl FromStr for AgentRuntime {
     }
 }
 
+/// User-owned information attached to an Agent Session.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SessionMetadata {
+    pub title: Option<String>,
+    pub tags: Vec<String>,
+}
+
 /// A read-only reference to a session owned by an Agent Runtime.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentSession {
@@ -41,6 +48,7 @@ pub struct AgentSession {
     pub id: String,
     pub cwd: Option<PathBuf>,
     pub last_activity: Option<SystemTime>,
+    pub metadata: SessionMetadata,
     /// Stable order in which the session was discovered, used for undated rows.
     pub discovery_order: usize,
 }
