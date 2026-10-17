@@ -12,6 +12,10 @@ _Avoid_: run, conversation, execution
 User-owned information attached to an Agent Session by its Agent Runtime and runtime UUID, independently of the runtime's session store.
 _Avoid_: session record, annotation
 
+**Current Agent Session**:
+The Agent Session associated with the host Agent Runtime currently executing the AIKeeper skill. Its Agent Runtime and runtime UUID come from that host's current-session context; the skill never accepts an arbitrary target session.
+_Avoid_: selected session, supplied session
+
 **Session Title**:
 An optional, trimmed, nonempty user-defined label for one Agent Session. Its case and internal whitespace are preserved; it contains no tab or line-break characters.
 _Avoid_: name, runtime title
